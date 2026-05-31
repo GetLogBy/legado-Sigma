@@ -46,7 +46,6 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 import androidx.core.content.edit
 import io.legado.app.model.VideoPlay.VIDEO_PREF_NAME
-import kotlinx.coroutines.currentCoroutineContext
 
 /**
  * 备份
@@ -57,6 +56,7 @@ object Backup {
         appCtx.filesDir.getFile("backup").createFolderIfNotExist().absolutePath
     }
     val zipFilePath = "${appCtx.externalFiles.absolutePath}${File.separator}tmp_backup.zip"
+    val encryptedFilePath = "${appCtx.externalFiles.absolutePath}${File.separator}tmp_backup.enc"
 
     private const val TAG = "Backup"
 
@@ -110,8 +110,12 @@ object Backup {
             Coroutine.async {
                 mutex.withLock {
                     if (shouldBackup()) {
-                        val backupZipFileName = getNowZipFileName()
-                        if (!AppWebDav.hasBackUp(backupZipFileName)) {
+                        val backupFileName = if (AppConfig.onlyLatestBackup) {
+                            "backup.enc"
+                        } else {
+                            getNowZipFileName().replace(".zip", ".enc")
+                        }
+                        if (!AppWebDav.hasBackUp(backupFileName)) {
                             backup(context, AppConfig.backupPath)
                         } else {
                             LocalConfig.lastBackup = System.currentTimeMillis()
@@ -151,6 +155,9 @@ object Backup {
         writeListToJson(appDb.httpTTSDao.all, "httpTTS.json", backupPath)
         writeListToJson(appDb.keyboardAssistsDao.all, "keyboardAssists.json", backupPath)
         writeListToJson(appDb.dictRuleDao.all, "dictRule.json", backupPath)
+        if (BackupConfig.includeLoginState) {
+            writeListToJson(appDb.cookieDao.all, "cookie.json", backupPath)
+        }
         GSON.toJson(appDb.serverDao.all).let { json ->
             aes.runCatching {
                 encryptBase64(json)
@@ -221,38 +228,45 @@ object Backup {
         currentCoroutineContext().ensureActive()
         val zipFileName = getNowZipFileName()
         val paths = arrayListOf(*backupFileNames)
+        if (BackupConfig.includeLoginState) {
+            paths.add("cookie.json")
+        }
         for (i in 0 until paths.size) {
             paths[i] = backupPath + File.separator + paths[i]
         }
         FileUtils.delete(zipFilePath)
         FileUtils.delete(zipFilePath.replace("tmp_", ""))
+        FileUtils.delete(encryptedFilePath)
         val backupFileName = if (AppConfig.onlyLatestBackup) {
-            "backup.zip"
+            "backup.enc"
         } else {
-            zipFileName
+            zipFileName.replace(".zip", ".enc")
         }
         if (ZipUtils.zipFiles(paths, zipFilePath)) {
+            val encryptedBytes = BackupAES().encrypt(File(zipFilePath).readBytes())
+            FileOutputStream(encryptedFilePath).use { it.write(encryptedBytes) }
             when {
                 path.isNullOrBlank() -> {
-                    copyBackup(context.getExternalFilesDir(null)!!, backupFileName)
+                    copyBackup(File(encryptedFilePath), context.getExternalFilesDir(null)!!, backupFileName)
                 }
 
                 path.isContentScheme() -> {
-                    copyBackup(context, path.toUri(), backupFileName)
+                    copyBackup(context, path.toUri(), backupFileName, encryptedFilePath)
                 }
 
                 else -> {
-                    copyBackup(File(path), backupFileName)
+                    copyBackup(File(encryptedFilePath), File(path), backupFileName)
                 }
             }
             try {
-                AppWebDav.backUpWebDav(zipFileName)
+                AppWebDav.backUpWebDav(backupFileName)
             } catch (e: Exception) {
                 AppLog.put("上传备份至webdav失败\n$e", e)
             }
         }
         FileUtils.delete(backupPath)
         FileUtils.delete(zipFilePath)
+        FileUtils.delete(encryptedFilePath)
         currentCoroutineContext().ensureActive()
         ReadBookConfig.getAllPicBgStr().map {
             if (it.contains(File.separator)) {
@@ -283,7 +297,7 @@ object Backup {
 
     @Throws(Exception::class)
     @Suppress("SameParameterValue")
-    private fun copyBackup(context: Context, uri: Uri, fileName: String) {
+    private fun copyBackup(context: Context, uri: Uri, fileName: String, sourceFilePath: String) {
         val treeDoc = DocumentFile.fromTreeUri(context, uri)!!
         treeDoc.findFile(fileName)?.delete()
         val fileDoc = treeDoc.createFile("", fileName)
@@ -291,7 +305,7 @@ object Backup {
         val outputS = fileDoc.openOutputStream()
             ?: throw NoStackTraceException("打开OutputStream失败")
         outputS.use {
-            FileInputStream(zipFilePath).use { inputS ->
+            FileInputStream(sourceFilePath).use { inputS ->
                 inputS.copyTo(outputS)
             }
         }
@@ -299,8 +313,8 @@ object Backup {
 
     @Throws(Exception::class)
     @Suppress("SameParameterValue")
-    private fun copyBackup(rootFile: File, fileName: String) {
-        FileInputStream(File(zipFilePath)).use { inputS ->
+    private fun copyBackup(sourceFile: File, rootFile: File, fileName: String) {
+        FileInputStream(sourceFile).use { inputS ->
             val file = FileUtils.createFileIfNotExist(rootFile, fileName)
             FileOutputStream(file).use { outputS ->
                 inputS.copyTo(outputS)
@@ -311,5 +325,6 @@ object Backup {
     fun clearCache() {
         FileUtils.delete(backupPath)
         FileUtils.delete(zipFilePath)
+        FileUtils.delete(encryptedFilePath)
     }
 }

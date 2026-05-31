@@ -10,6 +10,7 @@ import io.legado.app.data.entities.BookProgress
 import io.legado.app.exception.NoStackTraceException
 import io.legado.app.help.config.AppConfig
 import io.legado.app.help.storage.Backup
+import io.legado.app.help.storage.BackupAES
 import io.legado.app.help.storage.Restore
 import io.legado.app.lib.webdav.Authorization
 import io.legado.app.lib.webdav.WebDav
@@ -119,13 +120,21 @@ object AppWebDav {
     }
 
     @Throws(WebDavException::class)
-    suspend fun restoreWebDav(name: String) {
+    suspend fun restoreWebDav(name: String, restoreLoginState: Boolean = false) {
         authorization?.let {
             val webDav = WebDav(rootWebDavUrl + name, it)
-            webDav.downloadTo(Backup.zipFilePath, true)
+            val isEncrypted = name.endsWith(".enc", true)
+            val backupFilePath = if (isEncrypted) Backup.encryptedFilePath else Backup.zipFilePath
+            webDav.downloadTo(backupFilePath, true)
             FileUtils.delete(Backup.backupPath)
+            if (isEncrypted) {
+                val zipBytes = BackupAES().decrypt(File(Backup.encryptedFilePath).readBytes())
+                FileUtils.createFileIfNotExist(Backup.zipFilePath).outputStream().use {
+                    it.write(zipBytes)
+                }
+            }
             ZipUtils.unZipToPath(File(Backup.zipFilePath), Backup.backupPath)
-            Restore.restoreLocked(Backup.backupPath)
+            Restore.restoreLocked(Backup.backupPath, restoreLoginState)
         }
     }
 

@@ -5,6 +5,7 @@ import io.legado.app.constant.PreferKey
 import io.legado.app.utils.FileUtils
 import io.legado.app.utils.GSON
 import io.legado.app.utils.fromJsonObject
+import io.legado.app.utils.getPrefBoolean
 import splitties.init.appCtx
 
 /**
@@ -138,6 +139,9 @@ object BackupConfig {
         get() = ignoreConfig[PreferKey.threadCount] == true
     val ignoreLocalBook: Boolean
         get() = ignoreConfig[localBookKey] == true
+
+    val includeLoginState: Boolean
+        get() = appCtx.getPrefBoolean(PreferKey.backupIncludeLoginState)
 
     fun saveIgnoreConfig() {
         val json = GSON.toJson(ignoreConfig)

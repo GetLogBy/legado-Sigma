@@ -88,15 +88,17 @@ class BackupConfigFragment : PreferenceFragment(),
     }
     private val restoreDoc = registerForActivityResult(HandleFileContract()) {
         it.uri?.let { uri ->
-            waitDialog.setText("恢复中…")
-            waitDialog.show()
-            val task = Coroutine.async {
-                Restore.restore(appCtx, uri)
-            }.onFinally {
-                waitDialog.dismiss()
-            }
-            waitDialog.setOnCancelListener {
-                task.cancel()
+            askRestoreLoginState { restoreLoginState ->
+                waitDialog.setText("恢复中…")
+                waitDialog.show()
+                val task = Coroutine.async {
+                    Restore.restore(appCtx, uri, restoreLoginState)
+                }.onFinally {
+                    waitDialog.dismiss()
+                }
+                waitDialog.setOnCancelListener {
+                    task.cancel()
+                }
             }
         }
     }
@@ -369,18 +371,20 @@ class BackupConfigFragment : PreferenceFragment(),
     }
 
     private fun restoreWebDav(name: String) {
-        waitDialog.setText("恢复中…")
-        waitDialog.show()
-        val task = Coroutine.async {
-            AppWebDav.restoreWebDav(name)
-        }.onError {
-            AppLog.put("WebDav恢复出错\n${it.localizedMessage}", it)
-            appCtx.toastOnUi("WebDav恢复出错\n${it.localizedMessage}")
-        }.onFinally {
-            waitDialog.dismiss()
-        }
-        waitDialog.setOnCancelListener {
-            task.cancel()
+        askRestoreLoginState { restoreLoginState ->
+            waitDialog.setText("恢复中…")
+            waitDialog.show()
+            val task = Coroutine.async {
+                AppWebDav.restoreWebDav(name, restoreLoginState)
+            }.onError {
+                AppLog.put("WebDav恢复出错\n${it.localizedMessage}", it)
+                appCtx.toastOnUi("WebDav恢复出错\n${it.localizedMessage}")
+            }.onFinally {
+                waitDialog.dismiss()
+            }
+            waitDialog.setOnCancelListener {
+                task.cancel()
+            }
         }
     }
 
@@ -388,7 +392,18 @@ class BackupConfigFragment : PreferenceFragment(),
         restoreDoc.launch {
             title = getString(R.string.select_restore_file)
             mode = HandleFileContract.FILE
-            allowExtensions = arrayOf("zip")
+            allowExtensions = arrayOf("zip", "enc")
+        }
+    }
+
+    private fun askRestoreLoginState(onResult: (Boolean) -> Unit) {
+        alert(R.string.restore_login_state_title, R.string.restore_login_state_message) {
+            okButton(R.string.yes) {
+                onResult(true)
+            }
+            cancelButton(R.string.no) {
+                onResult(false)
+            }
         }
     }
 

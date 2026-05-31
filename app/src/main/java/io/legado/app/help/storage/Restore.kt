@@ -14,6 +14,7 @@ import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookGroup
 import io.legado.app.data.entities.BookSource
 import io.legado.app.data.entities.Bookmark
+import io.legado.app.data.entities.Cookie
 import io.legado.app.data.entities.DictRule
 import io.legado.app.data.entities.HttpTTS
 import io.legado.app.data.entities.KeyboardAssist
@@ -58,6 +59,7 @@ import kotlinx.coroutines.withContext
 import splitties.init.appCtx
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileOutputStream
 
 /**
  * 恢复
@@ -68,37 +70,55 @@ object Restore {
 
     private const val TAG = "Restore"
 
-    suspend fun restore(context: Context, uri: Uri) {
+    suspend fun restore(context: Context, uri: Uri, restoreLoginState: Boolean = false) {
         LogUtils.d(TAG, "开始恢复备份 uri:$uri")
         kotlin.runCatching {
             FileUtils.delete(Backup.backupPath)
+            FileUtils.delete(Backup.zipFilePath)
             if (uri.isContentScheme()) {
-                DocumentFile.fromSingleUri(context, uri)!!.openInputStream()!!.use {
-                    ZipUtils.unZipToPath(it, Backup.backupPath)
+                val doc = DocumentFile.fromSingleUri(context, uri)!!
+                val ext = doc.name?.substringAfterLast('.', "")?.lowercase()
+                if (ext == "enc") {
+                    doc.openInputStream()!!.use {
+                        decryptToZip(it.readBytes())
+                    }
+                    ZipUtils.unZipToPath(File(Backup.zipFilePath), Backup.backupPath)
+                } else {
+                    doc.openInputStream()!!.use {
+                        ZipUtils.unZipToPath(it, Backup.backupPath)
+                    }
                 }
             } else {
-                ZipUtils.unZipToPath(File(uri.path!!), Backup.backupPath)
+                val file = File(uri.path!!)
+                if (file.extension.equals("enc", true)) {
+                    decryptToZip(file.readBytes())
+                    ZipUtils.unZipToPath(File(Backup.zipFilePath), Backup.backupPath)
+                } else {
+                    ZipUtils.unZipToPath(file, Backup.backupPath)
+                }
             }
         }.onFailure {
             AppLog.put("复制解压文件出错\n${it.localizedMessage}", it)
             return
         }
         kotlin.runCatching {
-            restoreLocked(Backup.backupPath)
+            restoreLocked(Backup.backupPath, restoreLoginState)
             LocalConfig.lastBackup = System.currentTimeMillis()
         }.onFailure {
             appCtx.toastOnUi("恢复备份出错\n${it.localizedMessage}")
             AppLog.put("恢复备份出错\n${it.localizedMessage}", it)
+        }.also {
+            FileUtils.delete(Backup.zipFilePath)
         }
     }
 
-    suspend fun restoreLocked(path: String) {
+    suspend fun restoreLocked(path: String, restoreLoginState: Boolean = false) {
         mutex.withLock {
-            restore(path)
+            restore(path, restoreLoginState)
         }
     }
 
-    private suspend fun restore(path: String) {
+    private suspend fun restore(path: String, restoreLoginState: Boolean) {
         val aes = BackupAES()
         fileToListT<Book>(path, "bookshelf.json")?.let {
             it.forEach { book ->
@@ -164,6 +184,11 @@ object Restore {
         }
         fileToListT<DictRule>(path, "dictRule.json")?.let {
             appDb.dictRuleDao.insert(*it.toTypedArray())
+        }
+        if (restoreLoginState) {
+            fileToListT<Cookie>(path, "cookie.json")?.let {
+                appDb.cookieDao.insert(*it.toTypedArray())
+            }
         }
         fileToListT<KeyboardAssist>(path, "keyboardAssists.json")?.let {
             appDb.keyboardAssistsDao.deleteAll() //先删除所有,保证和备份数据一样
@@ -326,6 +351,17 @@ object Restore {
             appCtx.toastOnUi("$fileName\n读取文件出错\n${e.localizedMessage}")
         }
         return null
+    }
+
+    private fun decryptToZip(encryptedBytes: ByteArray) {
+        val zipBytes = BackupAES().decrypt(encryptedBytes)
+        FileOutputStream(Backup.zipFilePath).use {
+            it.write(zipBytes)
+        }
+    }
+
+    fun hasLoginStateBackup(path: String): Boolean {
+        return File(path, "cookie.json").exists()
     }
 
 }
