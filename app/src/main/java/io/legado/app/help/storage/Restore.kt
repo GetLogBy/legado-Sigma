@@ -60,6 +60,7 @@ import splitties.init.appCtx
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.InputStream
 
 /**
  * 恢复
@@ -80,7 +81,7 @@ object Restore {
                 val ext = doc.name?.substringAfterLast('.', "")?.lowercase()
                 if (ext == "enc") {
                     doc.openInputStream()!!.use {
-                        decryptToZip(it.readBytes())
+                        decryptToZip(it)
                     }
                     ZipUtils.unZipToPath(File(Backup.zipFilePath), Backup.backupPath)
                 } else {
@@ -91,7 +92,9 @@ object Restore {
             } else {
                 val file = File(uri.path!!)
                 if (file.extension.equals("enc", true)) {
-                    decryptToZip(file.readBytes())
+                    FileInputStream(file).use {
+                        decryptToZip(it)
+                    }
                     ZipUtils.unZipToPath(File(Backup.zipFilePath), Backup.backupPath)
                 } else {
                     ZipUtils.unZipToPath(file, Backup.backupPath)
@@ -353,10 +356,9 @@ object Restore {
         return null
     }
 
-    private fun decryptToZip(encryptedBytes: ByteArray) {
-        val zipBytes = BackupAES().decrypt(encryptedBytes)
-        FileOutputStream(Backup.zipFilePath).use {
-            it.write(zipBytes)
+    private fun decryptToZip(inputStream: InputStream) {
+        FileOutputStream(Backup.zipFilePath).use { outputStream ->
+            BackupAES().decryptStream(inputStream, outputStream)
         }
     }
 

@@ -398,10 +398,10 @@ class BackupConfigFragment : PreferenceFragment(),
 
     private fun askRestoreLoginState(onResult: (Boolean) -> Unit) {
         alert(R.string.restore_login_state_title, R.string.restore_login_state_message) {
-            okButton(R.string.yes) {
+            okButton {
                 onResult(true)
             }
-            cancelButton(R.string.no) {
+            cancelButton {
                 onResult(false)
             }
         }
